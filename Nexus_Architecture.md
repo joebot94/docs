@@ -1,75 +1,289 @@
 # Nexus — Grand Server Architecture
 > Joebot Ecosystem Central Coordinator
 > GitHub: github.com/joebot94/nexus
-> Document version 1.1 — March 2026
-> Changes: Added action vocabulary, adapter pattern, and device registry from ShowControl v0
+> Document version 1.2 — March 2026
+> Changes: Corrected architecture — Nexus owns ALL hardware adapters. Atlas and DirtyMixerApp are UI clients only. DirtyMixerApp exception noted for USB serial.
+
+---
+
+## The One Sentence Version
+
+**Apps speak Nexus. Nexus speaks hardware. Users see magic.** 🦖
 
 ---
 
 ## What Nexus Is
 
-Nexus is the central coordination server for the entire Joebot studio ecosystem. It is the single point through which all apps, devices, and interfaces communicate. No app talks directly to another app — everything goes through Nexus.
+Nexus is the central coordination server for the entire Joebot studio ecosystem. It is the single point through which all apps communicate AND the only thing that ever talks to physical hardware.
 
-Nexus is not a controller. It does not make creative decisions. It routes intent, maintains state, and keeps every connected client informed.
+Every app is just a UI. Nexus is the brain, the translator, and the executor.
+
+---
+
+## The Final Architecture — Locked
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      NEXUS                              │
+│                                                         │
+│  Hardware Adapters:                                     │
+│  MTPXAdapter     → mtpx1.extron.video:23               │
+│  MGPAdapter      → mgp1.extron.video:23                │
+│  DMSAdapter      → dms.extron.video:23                 │
+│  MatrixAdapter   → mx.extron.video:23                  │
+│  IPCPAdapter     → ipcp505-1.extron.video (HTTP)       │
+│  IPLAdapter      → iplt-s4.extron.video:23             │
+│  DirtyMixerAdap  → via DirtyMixerApp (see exception)  │
+└─────────────────────────────────────────────────────────┘
+         ↑↓         ↑↓        ↑↓       ↑↓        ↑↓
+    GlitchBoard   Atlas  DirtyMixer  Glitch   Observatory
+    (timeline)   (Extron  (Mixer    Catalog   (monitor)
+                  UI)      UI)      (archive)
+```
+
+**Every app is a UI client. Nexus handles all hardware.**
+
+---
+
+## App Roles
+
+| App | Role | Hardware Access |
+|---|---|---|
+| GlitchBoard | Timeline/DAW show control UI | None — sends intents to Nexus |
+| Atlas | Extron gear control UI | None — sends intents to Nexus |
+| DirtyMixerApp | Mixer control UI + board owner | USB Serial to board only (see exception) |
+| Glitch Catalog | Session archive UI | None — sends intents to Nexus |
+| Observatory | Monitor and launcher UI | None — read only from Nexus |
+| Text Wall | Display UI | None — receives commands from Nexus |
+| DAW App | Beat sync UI | None — sends intents to Nexus |
+| MIDI App | Controller mapping UI | None — sends intents to Nexus |
+
+---
+
+## The DirtyMixerApp Exception
+
+DirtyMixerApp is the one exception to the rule.
+
+DirtyMixerApp communicates directly with the physical dirty mixer board over USB serial. This is because:
+- The dirty mixer board is a custom built device
+- It connects via USB-C to the host Mac
+- USB serial is inherently local and direct
+- DirtyMixerApp is the designated owner of that hardware
+
+**However** — DirtyMixerApp still participates in Nexus fully:
+- Registers with Nexus on launch
+- Reports board state to Nexus constantly
+- Receives commands FROM Nexus when other apps want to change something
+- When GlitchBoard wants the mixer to do something it goes through Nexus → DirtyMixerApp → USB → Board
+
+DirtyMixerApp is the hardware owner. Nexus is the coordinator. They work together.
+
+**The dirty mixer flow:**
+```
+GlitchBoard → Nexus → DirtyMixerApp → USB Serial → Board
+```
+
+**DirtyMixerApp reporting state:**
+```
+Board state changes → DirtyMixerApp → Nexus state store → all apps notified
+```
+
+---
+
+## What Atlas Is
+
+Atlas is a beautiful SwiftUI control surface for Extron gear. It is NOT a hardware controller.
+
+Atlas sends intents to Nexus in plain Nexus protocol. Nexus translates those intents into SIS commands via its adapters. Atlas has zero knowledge of SIS syntax, TCP connections, or device hostnames.
+
+**Atlas does:**
+- Provides UI for recalling presets, adjusting skew, firing IR, changing routing
+- Shows live device status from Nexus state store
+- Sends intents to Nexus
+- Reports its own UI state to Nexus
+
+**Atlas does NOT:**
+- Speak SIS
+- Open TCP connections to Extron devices
+- Know device hostnames or ports
+- Talk to any hardware directly
+
+---
+
+## What Nexus Does
+
+Nexus is the only thing with hardware knowledge. It has an adapter for every device type.
+
+**Nexus responsibilities:**
+- Accept WebSocket connections from all apps
+- Route messages between apps
+- Maintain state store for every connected client
+- Handle scene save and recall
+- Own and manage ALL hardware adapters
+- Translate logical actions into device-native commands
+- Execute hardware commands directly
+- Handle unsolicited responses from hardware (front panel knob changes etc)
+- Log all events with timestamps for session recording
+
+---
+
+## Hardware Ownership
+
+| Hardware | Owner | Protocol |
+|---|---|---|
+| MTPX Plus series | Nexus MTPXAdapter | Extron SIS TCP port 23 |
+| MGP 464 | Nexus MGPAdapter | Extron SIS TCP port 23 |
+| DMS 3600 | Nexus DMSAdapter | Extron SIS TCP port 23 |
+| Matrix 12800 | Nexus MatrixAdapter | Extron SIS TCP port 23 |
+| IPCP 505 | Nexus IPCPAdapter | HTTP + Extron SIS |
+| IPL T series | Nexus IPLAdapter | HTTP + Extron SIS |
+| VSC series | Nexus VSCAdapter | Via IPCP serial passthrough |
+| DSC 401A | Nexus DSCAdapter | Extron SIS TCP port 23 |
+| Dirty Mixer Board | DirtyMixerApp | USB Serial (exception) |
+
+---
+
+## Action Flow Examples
+
+**GlitchBoard wants MTPX blue skew at maximum:**
+```
+GlitchBoard sends intent to Nexus:
+  action: set_input_skew
+  device: device.mtpx.1
+  params: {input: 3, red: 0, green: 0, blue: 31}
+
+Nexus MTPXAdapter translates:
+  3*0*0*31*4Iseq↵
+
+Nexus sends to mtpx1.extron.video:23
+Hardware responds
+Nexus updates state store
+All apps notified of new state
+```
+
+**Atlas UI user recalls MGP preset 5:**
+```
+Atlas sends intent to Nexus:
+  action: recall_preset
+  device: device.mgp.1
+  params: {preset: 5}
+
+Nexus MGPAdapter translates:
+  5.↵
+
+Nexus sends to mgp1.extron.video:23
+Hardware responds
+Nexus updates state store
+```
+
+**GlitchBoard wants dirty mixer channel 3 mix at 200:**
+```
+GlitchBoard sends intent to Nexus:
+  action: set_channel_mix
+  device: device.dirtymixer.1
+  params: {channel: 3, mix: 200}
+
+Nexus routes to DirtyMixerApp (exception path)
+DirtyMixerApp sends: CH3 MIX 200↵ over USB serial
+Board responds OK
+DirtyMixerApp reports new state to Nexus
+Nexus updates state store
+```
+
+**IPCP relay pulse on beat:**
+```
+GlitchBoard sends intent to Nexus:
+  action: pulse_relay
+  device: device.ipcp505.1
+  params: {relay: 1}
+
+Nexus IPCPAdapter fires:
+  GET http://ipcp505-1.extron.video/W=1R01
+
+Relay clicks on front panel
+```
+
+---
+
+## Unsolicited Hardware Responses
+
+When a user turns a knob on the front panel of an Extron device the device sends an unsolicited response back over TCP. Nexus adapters must listen continuously and handle these responses.
+
+Example: User turns MTPX horizontal skew knob manually
+```
+MTPX sends: Iseq03•00•00•15↵  (unprompted)
+Nexus MTPXAdapter receives and parses it
+Nexus updates state store for device.mtpx.1
+All apps notified — Atlas UI updates to show new value
+Glitch Catalog event log records the change with timestamp
+```
+
+This is critical for session recording — every physical hardware change gets captured automatically.
 
 ---
 
 ## Core Responsibilities
 
-- Accept and maintain persistent connections from all clients
+- Accept and maintain persistent WebSocket connections from all clients
 - Route messages between clients based on intent
-- Maintain a live state store of every connected device and app
+- Maintain a live state store of every connected app and device
 - Hold last known state when a client goes offline
 - Alert Observatory when a client drops unexpectedly
-- Handle .jbt scene snapshots — save and recall full studio state
+- Handle .jbt scene snapshots — poll all clients and adapters, bundle state
 - Provide a queryable API so any client can ask "what is X doing right now"
-- Dispatch logical actions to device adapters
-- Translate logical actions into device-native commands
+- Own and execute ALL hardware adapters (except dirty mixer — see exception)
+- Listen for unsolicited hardware responses and update state accordingly
+- Log all events with timestamps for session replay
 
 ---
 
 ## What Nexus Is NOT
 
-- Not a hardware controller — that's Atlas, DirtyMixerApp, etc.
-- Not a show controller — apps handle their own timelines
+- Not a UI — Observatory, Atlas, GlitchBoard etc are the UIs
 - Not a file manager — Glitch Catalog handles session archives
-- Not a UI — Observatory is a separate Swift client
 - Not a creative decision maker — it only routes what clients tell it to
+- Not aware of show logic — apps handle their own timelines and automation
 
 ---
 
-## System Architecture
+## Capability Discovery
 
-```
-                    [ Nexus Server — Python ]
-                           |
-        ┌──────────────────┼──────────────────────┐
-        │                  │                       │
-   [ Atlas ]      [ DirtyMixerApp ]       [ Glitch Catalog ]
-        │                  │
-[ Extron Hardware ] [ Dirty Mixer Board ]
+Nexus exposes device capabilities so apps can build dynamic UIs without hardcoding device knowledge.
 
-        ┌──────────────────┼──────────────────────┐
-        │                  │                       │
- [ Text Wall ]    [ Observatory ]         [ Future Apps ]
+When GlitchBoard asks "what can the MTPX do":
+```json
+{
+  "type": "capabilities.query",
+  "payload": { "target_client_id": "device.mtpx.1" }
+}
 ```
 
-Every box is a peer client connected to Nexus. No direct connections between peers. Nexus knows everything. Clients know only themselves.
+Nexus responds from its adapter knowledge:
+```json
+{
+  "capabilities": {
+    "actions": [
+      {
+        "action": "set_input_skew",
+        "params": {
+          "input": {"type": "int", "range": [1,12]},
+          "red": {"type": "int", "range": [0,31]},
+          "green": {"type": "int", "range": [0,31]},
+          "blue": {"type": "int", "range": [0,31]}
+        }
+      },
+      {
+        "action": "recall_preset",
+        "params": {
+          "preset": {"type": "int", "range": [1,32]}
+        }
+      }
+    ]
+  }
+}
+```
 
----
-
-## Tech Stack
-
-| Component | Technology |
-|---|---|
-| Server runtime | Python 3.11+ |
-| Async framework | asyncio |
-| Transport protocol | WebSockets |
-| Message validation | Pydantic v2 |
-| State store | In-memory Python dict (Redis optional later) |
-| File I/O | .jbt JSON format |
-| Dashboard client | Swift / SwiftUI — Observatory |
-| Future scaling | MQTT broker optional for device-heavy expansion |
+GlitchBoard builds its cue editor dropdowns from this response. No hardcoding. Add a new device — Nexus has the adapter — every app immediately gets access to its capabilities.
 
 ---
 
@@ -77,343 +291,24 @@ Every box is a peer client connected to Nexus. No direct connections between pee
 
 ### Client Registration
 
-When any app or device connects to Nexus it immediately sends a registration message:
-
+Every app registers on connect:
 ```json
 {
   "type": "register",
-  "client_id": "dirtymixer_v1",
-  "client_type": "dirtymixer",
+  "client_id": "atlas",
+  "client_type": "extron_controller",
   "version": "1.0.0",
-  "capabilities": ["presets", "automation", "random_mode"]
+  "capabilities": ["preset_recall", "skew_control", "routing"]
 }
 ```
-
-Nexus responds with acknowledgement and current ecosystem state summary.
 
 ### Heartbeat
 
-Every connected client sends a heartbeat every 5 seconds:
-
-```json
-{
-  "type": "heartbeat",
-  "client_id": "dirtymixer_v1",
-  "timestamp": 1234567890
-}
-```
-
-If Nexus misses 3 consecutive heartbeats from a client:
-- Client is marked offline in state store
-- Last known state is retained
-- Observatory receives an alert
-- Other clients that care are notified
+Every client sends heartbeat every 5 seconds. Miss 3 = marked offline. Last known state retained.
 
 ### State Reporting
 
-Clients report their full state to Nexus whenever something changes:
-
-```json
-{
-  "type": "state_update",
-  "client_id": "dirtymixer_v1",
-  "state": {
-    "connected_to_board": true,
-    "active_preset": "Preset 12",
-    "channels": [
-      { "id": 1, "a": true, "b": true, "mix": 128 },
-      { "id": 2, "a": true, "b": false, "mix": 255 }
-    ]
-  }
-}
-```
-
----
-
-## Message Envelope
-
-All messages use a standard envelope:
-
-```json
-{
-  "id": "msg_001",
-  "type": "scene.request",
-  "source": "client_name",
-  "payload": { ... }
-}
-```
-
-All message models are defined using Pydantic v2.
-
----
-
-## Message Types
-
-### Client → Nexus
-
-| Message Type | Description |
-|---|---|
-| `register` | Initial connection and capability declaration |
-| `heartbeat` | Keep-alive ping |
-| `state_update` | Report current state to Nexus |
-| `intent` | Ask Nexus to coordinate an action across clients |
-| `query` | Ask Nexus for current state of another client |
-| `scene_save` | Ask Nexus to capture full ecosystem snapshot |
-| `scene_recall` | Ask Nexus to restore a saved scene snapshot |
-| `device.list` | Query all known devices and status |
-| `scene.list` | Query all known scenes |
-| `device.command` | Send a logical action to a specific device |
-| `scene.request` | Request a scene be fired |
-
-### Nexus → Client
-
-| Message Type | Description |
-|---|---|
-| `registered` | Confirmation of successful registration |
-| `command` | Instruction routed from another client |
-| `state_response` | Answer to a query request |
-| `client_offline` | Alert that another client has gone offline |
-| `client_online` | Alert that a client has reconnected |
-| `scene_saved` | Confirmation that scene snapshot was captured |
-| `scene_recalled` | Confirmation that scene recall was dispatched |
-| `log.event` | Broadcast log entry to Observatory |
-| `device.status` | Device connection/state change broadcast |
-| `scene.activated` | Broadcast that a scene was fired |
-| `error` | Error response |
-
----
-
-## Action Vocabulary
-
-Nexus operates on logical actions. Adapters translate these into device-native commands. No device-specific syntax ever appears in Nexus core logic.
-
-### Universal Actions
-
-| Action | Description |
-|---|---|
-| `recall_preset` | Recall a named or numbered preset on a device |
-
-### Video / Display Actions
-
-| Action | Description |
-|---|---|
-| `set_video_mute` | Mute video output visually — signal stays synced, output goes black |
-| `set_skew` | Set RGB skew compensation values (MTPX) |
-| `reset_skew` | Reset RGB skew to default (MTPX) |
-| `set_prepeaking` | Set pre-peaking voltage boost level (MTPX) |
-
-### Control / Relay Actions
-
-| Action | Description |
-|---|---|
-| `pulse_relay` | Trigger a relay pulse on IPCP device |
-| `trigger_ir` | Fire an IR command via IPCP EIR list |
-| `serial_passthrough` | Send raw SIS or device-native serial through IPCP serial port |
-
-### DirtyMixer Actions
-
-| Action | Description |
-|---|---|
-| `set_channel_mix` | Set mix value for a channel (0–255) |
-| `set_channel_input_a` | Enable or disable input A on a channel |
-| `set_channel_input_b` | Enable or disable input B on a channel |
-| `recall_dirtymixer_preset` | Recall a DirtyMixerApp preset by ID |
-| `set_random_mode` | Enable or disable random mode on a channel |
-
-### Example Action Payload
-
-```json
-{
-  "id": "msg_042",
-  "type": "device.command",
-  "source": "atlas",
-  "payload": {
-    "device_id": "device.dms.main",
-    "action": "recall_preset",
-    "params": { "preset": 1 }
-  }
-}
-```
-
----
-
-## Adapter Pattern
-
-Each device type has its own adapter. Adapters translate logical actions into device-native protocol commands. No device-specific syntax ever lives in Nexus core.
-
-### Base Adapter Interface
-
-```python
-class BaseAdapter:
-    async def connect(self) -> bool: ...
-    async def disconnect(self) -> None: ...
-    async def execute(self, action: str, params: dict) -> dict: ...
-    def get_capabilities(self) -> list[str]: ...
-```
-
-### Known Adapters
-
-| Adapter | Device | Protocol |
-|---|---|---|
-| `MatrixAdapter` | Matrix 12800 | Extron SIS TCP |
-| `DMSAdapter` | DMS 3600 | Extron SIS TCP |
-| `MGPAdapter` | MGP 464 | Extron SIS TCP |
-| `IPCP505Adapter` | IPCP 505 | HTTP + SIS |
-| `MTPXAdapter` | MTPX Plus | Extron SIS TCP |
-| `DirtyMixerAdapter` | Dirty Mixer Board | USB Serial |
-
-### Extron Preset Recall
-
-For all Extron SIS devices, preset recall syntax is:
-
-```
-{preset_number}.
-```
-
-Example: Recall preset 1 → send `1.` over TCP port 23.
-
-Logical action `recall_preset` with `{"preset": 1}` maps to `"1."` in all Extron adapters.
-
-### IPCP 505 Relay
-
-Relay pulse performed via HTTP:
-
-```
-http://ipcp505-1.extron.video/W=1R01
-```
-
-Logical action `pulse_relay` with relay ID maps to this URL pattern.
-IR and serial passthrough are stubbed pending exact syntax — marked TODO in adapter code.
-
----
-
-## Device Registry
-
-### Known Devices
-
-| Device ID | Label | Type | Hostname | Port |
-|---|---|---|---|---|
-| `device.matrix.main` | Matrix 12800 | matrix | mx.extron.video | 23 |
-| `device.dms.main` | DMS 3600 | dms | dms.extron.video | 23 |
-| `device.mgp.1` | MGP 464 #1 | mgp | mgp1.extron.video | 23 |
-| `device.mgp.2` | MGP 464 #2 | mgp | mgp2.extron.video | 23 |
-| `device.mgp.3` | MGP 464 #3 | mgp | mgp3.extron.video | 23 |
-| `device.ipcp505.1` | IPCP 505 #1 | ipcp505 | ipcp505-1.extron.video | 23 |
-| `device.mtpx.1` | MTPX Plus #1 | mtpx | mtpx1.extron.video | 23 |
-| `device.mtpx.2` | MTPX Plus #2 | mtpx | mtpx2.extron.video | 23 |
-| `device.dirtymixer.1` | Dirty Mixer Board | dirtymixer | USB | — |
-
-Default port for Extron TCP devices: **23**
-Master server hostname: **show.joe.bot**
-
----
-
-## Intent Routing
-
-Atlas sends intent to Nexus — never directly to another app:
-
-```json
-{
-  "type": "intent",
-  "from": "atlas",
-  "targets": ["dirtymixer_v1", "textwall_v1"],
-  "action": "recall_preset",
-  "payload": { "preset_id": 12 },
-  "sync": true,
-  "timestamp": 1234567890
-}
-```
-
-Nexus fans this out simultaneously to all targets. Everything fires in sync.
-
----
-
-## State Store
-
-```python
-state_store = {
-    "atlas": {
-        "status": "online",
-        "last_seen": 1234567890,
-        "last_state": { ... }
-    },
-    "dirtymixer_v1": {
-        "status": "online",
-        "last_seen": 1234567890,
-        "last_state": { ... }
-    },
-    "textwall_v1": {
-        "status": "offline",
-        "last_seen": 1234567880,
-        "last_state": { ... }  # retained even when offline
-    }
-}
-```
-
----
-
-## Scene Snapshot System
-
-### Saving a Scene
-
-1. Nexus receives `scene_save` request
-2. Nexus polls all connected clients for current state
-3. Each client responds with full state dump
-4. Nexus bundles into a `glitch_session` .jbt file
-5. .jbt returned to Glitch Catalog for storage
-
-### Recalling a Scene
-
-1. Glitch Catalog sends `scene_recall` with .jbt payload
-2. Nexus parses the bundle
-3. Nexus fans relevant chunks to each client
-4. Each client executes its own recall
-5. Nexus confirms completion
-
-### Initial Scene Definitions
-
-| Scene ID | Description |
-|---|---|
-| `scene.video_wall.3x3` | Full 3x3 wall — matrix + DMS + MGP presets |
-| `scene.video_wall.1x1` | Single fullscreen |
-| `scene.text.fullscreen` | Text wall fullscreen mode |
-| `scene.wall.blackout` | All outputs muted/blacked |
-
-### Initial Pattern Definitions
-
-| Pattern ID | Description |
-|---|---|
-| `pattern.random_chaos.beats_1_3` | Random preset chaos on beats 1 and 3 |
-| `pattern.blank.snake_3x3` | Sequential mute/unmute across 3x3 wall |
-| `pattern.blank.checkerboard` | Alternating mute/unmute groups |
-| `pattern.lyric.advance_relay` | Pulse IPCP relay on lyric/text advance |
-
----
-
-## Client Offline Handling
-
-When a client misses 3 heartbeats:
-
-1. Nexus marks client `offline` in state store
-2. Last known state retained — NOT cleared
-3. Observatory receives alert with last known state
-4. On reconnect — Nexus marks `online`, notifies Observatory
-5. Client re-registers and reports fresh state
-
----
-
-## Client Registry
-
-| Client ID | Type | App | Controls |
-|---|---|---|---|
-| `atlas` | controller | Atlas | Extron MGP, DMS 3600, Matrix 12800 |
-| `dirtymixer_v1` | controller | DirtyMixerApp | Dirty Mixer Board |
-| `glitch_catalog` | archive | Glitch Catalog | Session files, scene recall |
-| `textwall_v1` | display | Text Wall App | Text display output |
-| `observatory` | monitor | Observatory | Read-only monitoring |
-| `future_*` | unknown | TBD | Extensible |
-
-New clients self-register on connection. Nexus requires no prior knowledge of them.
+Clients report state whenever something changes. Nexus stores it. Anyone can query it.
 
 ---
 
@@ -423,34 +318,32 @@ New clients self-register on connection. Nexus requires no prior knowledge of th
 nexus/
 ├── main.py
 ├── requirements.txt
-├── README.md
 ├── config/
 │   ├── devices.json
 │   ├── actions.json
 │   ├── scenes.json
 │   └── patterns.json
 ├── core/
-│   ├── app_state.py
-│   ├── device_registry.py
-│   ├── scene_registry.py
-│   ├── pattern_registry.py
+│   ├── registry.py
+│   ├── state_store.py
+│   ├── heartbeat.py
 │   ├── log_bus.py
 │   ├── dispatcher.py
 │   └── adapter_manager.py
 ├── api/
 │   ├── models.py
-│   ├── protocol.py
 │   ├── websocket_server.py
 │   └── handlers.py
 ├── adapters/
 │   ├── base.py
-│   ├── extron_common.py
-│   ├── matrix_adapter.py
-│   ├── dms_adapter.py
-│   ├── mgp_adapter.py
-│   ├── ipcp505_adapter.py
-│   ├── mtpx_adapter.py
-│   └── dirtymixer_adapter.py
+│   ├── extron_common.py      ← shared SIS helpers
+│   ├── mtpx_adapter.py       ← skew, peaking, routing
+│   ├── mgp_adapter.py        ← preset recall, mute
+│   ├── dms_adapter.py        ← preset recall, mute
+│   ├── matrix_adapter.py     ← routing, presets
+│   ├── ipcp_adapter.py       ← relay, IR, serial passthrough
+│   ├── ipl_adapter.py        ← serial passthrough
+│   └── dirtymixer_adapter.py ← routes to DirtyMixerApp (exception)
 └── jbt/
     ├── parser.py
     └── writer.py
@@ -458,20 +351,21 @@ nexus/
 
 ---
 
-## Observatory
+## Device Registry
 
-Observatory is the Swift/SwiftUI monitoring dashboard for Nexus.
-GitHub: `github.com/joebot94/observatory`
+| Device ID | Label | Adapter | Hostname | Port |
+|---|---|---|---|---|
+| `device.mtpx.1` | MTPX Plus #1 | MTPXAdapter | mtpx1.extron.video | 23 |
+| `device.mtpx.2` | MTPX Plus #2 | MTPXAdapter | mtpx2.extron.video | 23 |
+| `device.mgp.1` | MGP 464 #1 | MGPAdapter | mgp1.extron.video | 23 |
+| `device.mgp.2` | MGP 464 #2 | MGPAdapter | mgp2.extron.video | 23 |
+| `device.mgp.3` | MGP 464 #3 | MGPAdapter | mgp3.extron.video | 23 |
+| `device.dms.main` | DMS 3600 | DMSAdapter | dms.extron.video | 23 |
+| `device.matrix.main` | Matrix 12800 | MatrixAdapter | mx.extron.video | 23 |
+| `device.ipcp505.1` | IPCP 505 #1 | IPCPAdapter | ipcp505-1.extron.video | HTTP |
+| `device.dirtymixer.1` | Dirty Mixer Board | DirtyMixerAdapter* | via DirtyMixerApp | USB |
 
-Displays:
-- Live connection status of all clients
-- Per-device state cards with device-specific detail
-- Extron device health — temps, fans, power supply
-- Alerts panel for offline clients
-- Scene fire buttons
-- Live log feed from Nexus log bus
-
-Observatory is read-only by default. It observes and reports, does not command.
+*DirtyMixerAdapter routes through DirtyMixerApp — it does not connect directly to hardware.
 
 ---
 
@@ -479,9 +373,9 @@ Observatory is read-only by default. It observes and reports, does not command.
 
 ```python
 NEXUS_HOST = "0.0.0.0"
-NEXUS_PORT = 8765
-HEARTBEAT_INTERVAL = 5
-HEARTBEAT_TIMEOUT = 3
+NEXUS_PORT = 8675          # Jenny 📞
+HEARTBEAT_INTERVAL = 5     # seconds
+HEARTBEAT_TIMEOUT = 3      # missed beats before offline
 STATE_STORE_PATH = "~/.nexus/state/"
 JBT_LIBRARY_PATH = "~/.nexus/jbt/"
 MASTER_HOSTNAME = "show.joe.bot"
@@ -489,39 +383,31 @@ MASTER_HOSTNAME = "show.joe.bot"
 
 ---
 
-## Build Priority
+## Deployment Options
 
-1. WebSocket server accepting connections
-2. Client registration and heartbeat monitoring
-3. Pydantic message models
-4. State store with query support
-5. Adapter base class and Extron common module
-6. Device registry and config loading
-7. Intent routing to multiple targets
-8. Scene save/recall with .jbt
-9. Observatory basic connection and state display
-10. Pattern execution scaffolding
+### Single Machine (typical user)
+- Nexus runs as background service on same Mac as all apps
+- Apps connect to localhost:8675
+- User never interacts with Nexus directly
 
----
-
-## Longer Term Roadmap
-
-- Authentication between clients
-- MQTT bridge for very high device counts
-- Remote access over internet with auth
-- Full logging and traffic playback for debugging
-- iOS Observatory companion app
+### Dedicated Server (studio setup)
+- Nexus runs on N100 mini PC or Mac Mini
+- Apps connect over local network to nexus.joe.bot:8675
+- Always on, headless, silent
 
 ---
 
 ## Related Documents
 
-- `DirtyMixerApp_BuildGuide.md` — DirtyMixerApp Swift app spec
-- `JBT_Format_Spec.md` — .jbt file format canonical reference
-- `Ecosystem_Overview.md` — full Joebot ecosystem map (TODO)
+- `JBT_Format_Spec.md` — shared file format
+- `Extron_SIS_Reference.md` — device command reference
+- `DirtyMixerApp_BuildGuide.md` — dirty mixer app spec
+- `Observatory_BuildGuide.md` — Observatory spec
+- `GlitchBoard_Spec.md` — GlitchBoard DAW spec
 
 ---
 
 *Nexus — Central coordinator for the Joebot studio ecosystem*
+*Apps speak Nexus. Nexus speaks hardware. Users see magic.* 🦖
 *github.com/joebot94/nexus*
-*Document version 1.1 — March 2026*
+*Document version 1.2 — March 2026*
