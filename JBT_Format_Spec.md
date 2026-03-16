@@ -1,17 +1,38 @@
 # JBT Format Specification
 > Joebot Ecosystem Shared File Format
 > GitHub: github.com/joebot94/docs
-> Document version 1.0 — March 2026
+> Document version 1.1 — March 2026
+> Changes: Added new types (lyric_timeline v2.0, textwall_layout, daw_setlist,
+> nexus_device_registry, nexus_eir_library, midi_mapping, app_prefs,
+> capabilities_cache). Added .jbt mandate section. Updated storage locations.
+> 🦖 Joebot Ecosystem
+
+---
+
+## The .jbt Mandate
+
+**Every file in the Joebot ecosystem is .jbt. No exceptions.**
+
+JSON is the encoding format under the hood. `.jbt` is the contract on top.
+The `jbt_type` field at the root tells every app exactly what it's looking at.
+
+If it stores data, it's `.jbt`.
+If it's config, it's `.jbt`.
+If it's a preference file, it's `.jbt`.
+If Nexus touches it, it's `.jbt`.
+
+There are no `.json` config files anywhere in the ecosystem.
 
 ---
 
 ## What .jbt Is
 
-`.jbt` is the shared file format for the entire Joebot studio ecosystem. It is a JSON-based container format where the `jbt_type` field identifies what kind of object the file contains.
+`.jbt` is the shared file format for the entire Joebot studio ecosystem.
+Plain JSON under the hood, human readable, version tracked, extensible.
 
-Every Joebot app reads and writes `.jbt` files. Nexus uses `.jbt` for scene snapshots. Glitch Catalog stores sessions as `.jbt`. DirtyMixerApp saves presets as `.jbt`.
-
-The format is intentionally simple — plain JSON, human readable, version tracked, extensible.
+Every Joebot app reads and writes `.jbt` files. Nexus uses `.jbt` for everything.
+Glitch Catalog stores sessions as `.jbt`. DirtyMixerApp saves presets as `.jbt`.
+TextWall saves layouts as `.jbt`. GlitchBoard saves setlists as `.jbt`.
 
 ---
 
@@ -23,6 +44,7 @@ The format is intentionally simple — plain JSON, human readable, version track
 - Every .jbt file has a `created_at` timestamp at the root
 - Apps only process types they understand — unknown types are ignored gracefully
 - The format evolves via version field — old files remain readable
+- Unknown fields are always ignored, never errored on
 
 ---
 
@@ -34,7 +56,7 @@ Every .jbt file regardless of type shares this root structure:
 {
   "jbt_type": "string",
   "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
+  "created_at": "2026-03-15T00:00:00Z",
   "name": "Human readable name",
   "notes": "Optional notes",
   "payload": { ... }
@@ -46,28 +68,39 @@ Every .jbt file regardless of type shares this root structure:
 | `jbt_type` | Yes | Identifies the object type |
 | `version` | Yes | Format version for this type |
 | `created_at` | Yes | ISO 8601 timestamp |
+| `modified_at` | Optional | Set when file is updated |
 | `name` | Recommended | Human readable name |
 | `notes` | Optional | Free text notes |
 | `payload` | Yes | Type-specific content |
 
 ---
 
-## Known JBT Types
+## Complete JBT Type Registry
 
 | jbt_type | App | Description |
 |---|---|---|
-| `dirtymixer_preset` | DirtyMixerApp | Stored board state for all 9 channels |
+| `dirtymixer_preset` | DirtyMixerApp | Board state snapshot — all 9 channels |
 | `dirtymixer_timeline` | DirtyMixerApp | Keyframed automation over time |
 | `dirtymixer_clip` | DirtyMixerApp | Reusable automation segment |
 | `dirtymixer_project` | DirtyMixerApp | Full session — presets + timelines |
 | `extron_snapshot` | Atlas | Extron device state snapshot |
-| `glitch_session` | Glitch Catalog | Full studio session with scene snapshot |
-| `nexus_scene` | Nexus | Scene definition — actions across devices |
+| `glitch_session` | Glitch Catalog | Full studio session with event log |
+| `nexus_scene` | Nexus | Cross-app scene definition |
 | `nexus_pattern` | Nexus | Timed behavior pattern |
 | `nexus_cue_bundle` | Nexus | Collection of cues for show playback |
-| `textwall_state` | Text Wall | Text wall content and style state |
+| `nexus_event_log` | Nexus | Rolling event log from event logger |
+| `nexus_device_registry` | Nexus Control | All device configs — replaces devices.json |
+| `nexus_eir_library` | Nexus Control | IR command library per IPCP device |
+| `textwall_state` | TextWall | Text content and style for scene recall |
+| `textwall_layout` | TextWall | Saved named layout configuration |
+| `lyric_timeline` | Lyric App | Lyrics synced to audio with TextWall config |
+| `daw_setlist` | GlitchBoard | Full show — songs + cues + device lanes |
+| `midi_mapping` | Nexus Control | APC Mini / controller button assignments |
+| `app_prefs` | Any app | Per-app user preferences |
+| `capabilities_cache` | GlitchBoard | Cached Nexus capability responses |
 
-New types are added as new apps join the ecosystem. Existing apps ignore unknown types gracefully.
+New types are added as new apps join the ecosystem.
+Existing apps ignore unknown types gracefully — never error.
 
 ---
 
@@ -109,22 +142,6 @@ A complete snapshot of all 9 dirty mixer channel states.
 }
 ```
 
-#### Channel Fields
-
-| Field | Type | Description |
-|---|---|---|
-| `id` | int | Channel number 1–9 |
-| `input_a_enabled` | bool | Input A active |
-| `input_b_enabled` | bool | Input B active |
-| `mix` | int | Mix value 0–255 (or 0–1023 for 10-bit) |
-
-#### Transition Fields
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | `snap`, `linear`, `triangle`, `preset_default` |
-| `duration_ms` | int | Transition duration in milliseconds |
-
 ---
 
 ### dirtymixer_timeline
@@ -161,89 +178,22 @@ Keyframed automation for dirty mixer channels over time.
 }
 ```
 
-#### Track Fields
-
-| Field | Type | Description |
-|---|---|---|
-| `channel_ids` | array | Which channels this track controls |
-| `parameter` | string | `mix`, `input_a_enabled`, `input_b_enabled` |
-| `keyframes` | array | Time/value pairs |
-| `interpolation` | string | `linear`, `step`, `triangle` |
-| `mode` | string | Optional — `random` overrides keyframes |
-| `random_interval_ms` | int | How often random value is chosen in random mode |
-
----
-
-### dirtymixer_project
-
-Full DirtyMixerApp session container.
-
-```json
-{
-  "jbt_type": "dirtymixer_project",
-  "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
-  "name": "Show A",
-  "payload": {
-    "presets": [ ... ],
-    "timelines": [ ... ],
-    "clips": [ ... ],
-    "default_preset_id": "chaos_mode"
-  }
-}
-```
-
----
-
-### extron_snapshot
-
-Extron device state snapshot for scene recall.
-
-```json
-{
-  "jbt_type": "extron_snapshot",
-  "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
-  "name": "3x3 Wall State",
-  "payload": {
-    "devices": [
-      {
-        "device_id": "device.matrix.main",
-        "action": "recall_preset",
-        "params": { "preset": 5 }
-      },
-      {
-        "device_id": "device.dms.main",
-        "action": "recall_preset",
-        "params": { "preset": 3 }
-      },
-      {
-        "device_id": "device.mgp.1",
-        "action": "recall_preset",
-        "params": { "preset": 2 }
-      }
-    ]
-  }
-}
-```
-
 ---
 
 ### glitch_session
 
-Full studio session — the primary Glitch Catalog record type. Contains metadata, scene snapshot, media references, and notes.
+Full studio session — the primary Glitch Catalog record type.
 
 ```json
 {
   "jbt_type": "glitch_session",
   "version": "1.0",
   "created_at": "2026-02-25T00:00:00Z",
-  "name": "First Glitch Session",
-  "notes": "Autocreated example. Edit me.",
+  "name": "Basement Burn-In",
   "payload": {
-    "date": "2025-02-25",
+    "date": "2026-02-25",
     "location": "Studio A",
-    "tags": ["Datamosh", "RGB Skew"],
+    "tags": ["RGB Skew", "VHS", "Feedback"],
     "scene_snapshot": {
       "dirtymixer_preset": { ... },
       "extron_snapshot": { ... },
@@ -258,51 +208,71 @@ Full studio session — the primary Glitch Catalog record type. Contains metadat
       }
     ],
     "gear_chain": [
-      { "label": "Extron" },
+      { "label": "MTPX Plus 1616" },
+      { "label": "Dirty Mixer Board" },
       { "label": "Panasonic WJ-AVE5" }
     ],
     "digital_captures": [
       {
-        "filename": "20250225022171993.mp4",
+        "filename": "20260225_basement_burnin.mp4",
         "duration_s": 7.2,
         "resolution": "1920x1080",
         "codec": "hevc",
         "tags": ["capture"]
       }
-    ]
+    ],
+    "event_log": {
+      "session_id": "session_001",
+      "started_at": "2026-02-25T00:32:00.000Z",
+      "stopped_at": "2026-02-25T02:15:00.000Z",
+      "duration_seconds": 6180,
+      "events": [
+        {
+          "timestamp": "2026-02-25T00:32:01.234Z",
+          "relative_ms": 1234,
+          "type": "state_update",
+          "source": "dirtymixer_v1",
+          "summary": "CH3 mix changed to 194",
+          "payload": { "channels": [{"id": 3, "mix": 194}] }
+        }
+      ]
+    }
   }
 }
 ```
 
 ---
 
-### nexus_scene
+### nexus_device_registry
 
-A named collection of actions across devices, fired together by Nexus.
+All device configuration for the ecosystem. Replaces devices.json entirely.
+Stored at: `~/.nexus/jbt/device_registry.jbt`
 
 ```json
 {
-  "jbt_type": "nexus_scene",
+  "jbt_type": "nexus_device_registry",
   "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
-  "name": "Video Wall 3x3",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "Joebot Studio Device Registry",
   "payload": {
-    "scene_id": "scene.video_wall.3x3",
-    "actions": [
+    "devices": [
       {
-        "device_id": "device.matrix.main",
-        "action": "recall_preset",
-        "params": { "preset": 5 }
+        "device_id": "device.mtpx.1",
+        "type": "mtpx",
+        "hostname": "mtpx1.extron.video",
+        "label": "MTPX Plus 1616",
+        "location": "Rack 1",
+        "notes": "Primary RGB skew unit",
+        "enabled": true
       },
       {
-        "device_id": "device.dms.main",
-        "action": "recall_preset",
-        "params": { "preset": 3 }
-      },
-      {
-        "client_id": "dirtymixer_v1",
-        "action": "recall_dirtymixer_preset",
-        "params": { "preset_id": 12 }
+        "device_id": "device.ipcp505.1",
+        "type": "ipcp505",
+        "hostname": "ipcp505-1.extron.video",
+        "label": "IPCP 505 #1",
+        "location": "Rack 1",
+        "notes": "Stage left IR and relay",
+        "enabled": true
       }
     ]
   }
@@ -311,26 +281,34 @@ A named collection of actions across devices, fired together by Nexus.
 
 ---
 
-### nexus_pattern
+### nexus_eir_library
 
-A timed behavior template executed by Nexus.
+IR command library auto-discovered from an IPCP device.
+Stored at: `~/.nexus/jbt/eir_library_{device_id}.jbt`
 
 ```json
 {
-  "jbt_type": "nexus_pattern",
+  "jbt_type": "nexus_eir_library",
   "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
-  "name": "Random Chaos Beats 1 and 3",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "IPCP 505 #1 EIR Library",
   "payload": {
-    "pattern_id": "pattern.random_chaos.beats_1_3",
-    "trigger": "beat",
-    "trigger_beats": [1, 3],
-    "duration_bars": 4,
-    "targets": [
+    "device_id": "device.ipcp505.1",
+    "discovered_at": "2026-03-15T00:00:00Z",
+    "eir_files": [
       {
-        "device_id": "device.matrix.main",
-        "action": "recall_preset",
-        "params": { "preset_range": [1, 8] }
+        "file_number": 0,
+        "filename": "LGRGB+",
+        "device_description": "LG RGB LED Strip",
+        "commands": {
+          "1": "Power On/Off",
+          "13": "Blue",
+          "19": "Green",
+          "22": "Red",
+          "31": "White",
+          "45": "Brightness Up",
+          "46": "Brightness Down"
+        }
       }
     ]
   }
@@ -339,26 +317,236 @@ A timed behavior template executed by Nexus.
 
 ---
 
-### textwall_state
+### textwall_layout
 
-Text wall app content and style state for scene recall.
+A saved named TextWall display configuration.
+Stored at: `~/JBT/textwall/layouts/`
 
 ```json
 {
-  "jbt_type": "textwall_state",
+  "jbt_type": "textwall_layout",
   "version": "1.0",
-  "created_at": "2026-03-13T00:00:00Z",
-  "name": "Fullscreen White",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "Welcome to the Machine — Closing Shot",
   "payload": {
-    "content": "...",
-    "style": {
-      "font": "...",
-      "size": 120,
-      "color": "#FFFFFF",
-      "background": "#000000",
-      "alignment": "center"
+    "grid_size": "16x16",
+    "active_cells": "all",
+    "mode": "scatter",
+    "scatter_instances": 8,
+    "scatter_hz": 10,
+    "font": "Helvetica Neue",
+    "weight": "bold",
+    "color": "#FFFFFF",
+    "background": "#000000",
+    "transition": "cut"
+  }
+}
+```
+
+---
+
+### lyric_timeline v2.0
+
+Lyrics synced to audio with full TextWall configuration per cue.
+Authored in Lyric App. Importable into GlitchBoard as TextWall lane cues.
+
+```json
+{
+  "jbt_type": "lyric_timeline",
+  "version": "2.0",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "Welcome to the Machine",
+  "payload": {
+    "audio_file": "~/Music/welcome_to_the_machine.wav",
+    "audio_duration_s": 482.0,
+    "bpm": 72,
+    "time_signature": "4/4",
+    "hardware_config": {
+      "enabled": true,
+      "device_id": "device.ipcp505.1",
+      "action": "pulse_relay",
+      "relay": 2,
+      "pulse_duration_ms": 100
     },
-    "display_mode": "fullscreen"
+    "lyrics": [
+      {
+        "id": "lyric_001",
+        "time": 62.5,
+        "bar": 8,
+        "beat": 1,
+        "text": "welcome, my son",
+        "style": "verse",
+        "hardware_advance": true,
+        "textwall": {
+          "grid_size": "3x3",
+          "layout": "center_row",
+          "mode": "word",
+          "font": "Helvetica Neue",
+          "weight": "bold",
+          "color": "#FFFFFF",
+          "background": "#000000",
+          "transition": "cut"
+        }
+      },
+      {
+        "id": "lyric_clear_001",
+        "time": 67.8,
+        "type": "clear",
+        "text": null,
+        "textwall": null
+      },
+      {
+        "id": "lyric_scatter_final",
+        "time": 421.0,
+        "text": "welcome to the machine",
+        "style": "chorus",
+        "hardware_advance": false,
+        "textwall": {
+          "grid_size": "16x16",
+          "layout": "all_cells",
+          "mode": "scatter",
+          "scatter_instances": 8,
+          "scatter_hz": 10,
+          "color": "#FFFFFF",
+          "background": "#000000"
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+### daw_setlist
+
+Full GlitchBoard show — songs, cues, device lanes, TextWall lane included.
+
+```json
+{
+  "jbt_type": "daw_setlist",
+  "version": "1.0",
+  "created_at": "2026-03-14T00:00:00Z",
+  "name": "Show A — March 2026",
+  "payload": {
+    "songs": [
+      {
+        "id": "song_001",
+        "title": "Welcome to the Machine",
+        "audio_path": "~/Music/welcome_to_the_machine.wav",
+        "bpm": 72,
+        "time_signature": "4/4",
+        "cues": [ ... ],
+        "transition": { "type": "immediate", "transition_cues": [] }
+      }
+    ],
+    "global_cue_library": [ ... ],
+    "device_lanes": [
+      {
+        "device_id": "device.mtpx.1",
+        "label": "MTPX Plus #1",
+        "color": "#00FFFF",
+        "offline_behavior": "skip"
+      },
+      {
+        "device_id": "textwall_v1",
+        "label": "TextWall",
+        "color": "#AA00FF",
+        "offline_behavior": "skip"
+      }
+    ],
+    "midi_mappings": [ ... ]
+  }
+}
+```
+
+---
+
+### midi_mapping
+
+APC Mini Mk2 or other controller button/fader assignments.
+Stored at: `~/.nexus/jbt/midi_mapping_{controller_id}.jbt`
+All apps get mapping from Nexus — configured once, used everywhere.
+
+```json
+{
+  "jbt_type": "midi_mapping",
+  "version": "1.0",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "APC Mini Mk2 — Main Show",
+  "payload": {
+    "controller": "APC Mini Mk2",
+    "mappings": [
+      {
+        "button": {"row": 1, "col": 1},
+        "idle_color": "#004444",
+        "active_color": "#00FFFF",
+        "action": "recall_preset",
+        "device_id": "device.dirtymixer.1",
+        "params": {"preset_id": 12}
+      },
+      {
+        "fader": 1,
+        "action": "set_channel_mix",
+        "device_id": "device.dirtymixer.1",
+        "params": {"channel": 1},
+        "range_in": [0, 127],
+        "range_out": [0, 255]
+      }
+    ]
+  }
+}
+```
+
+---
+
+### app_prefs
+
+Per-app user preferences. Stored in app's JBT folder.
+
+```json
+{
+  "jbt_type": "app_prefs",
+  "version": "1.0",
+  "created_at": "2026-03-15T00:00:00Z",
+  "name": "GlitchBoard Preferences",
+  "payload": {
+    "app_id": "glitchboard",
+    "theme": "joebot",
+    "nexus_host": "localhost",
+    "nexus_port": 8675,
+    "nexus_autoconnect": true,
+    "default_snap": "1/4",
+    "default_zoom": "fit"
+  }
+}
+```
+
+---
+
+### capabilities_cache
+
+Cached Nexus capability responses. No more capabilities_cache.json.
+Stored at: `~/JBT/glitchboard/capabilities_cache.jbt`
+
+```json
+{
+  "jbt_type": "capabilities_cache",
+  "version": "1.0",
+  "created_at": "2026-03-15T00:00:00Z",
+  "payload": {
+    "cached_at": "2026-03-15T00:00:00Z",
+    "devices": {
+      "device.mtpx.1": {
+        "actions": [ ... ],
+        "cached_at": "2026-03-15T00:00:00Z"
+      },
+      "textwall_v1": {
+        "grid_sizes": ["1x1","2x2","3x3","4x4","8x8","16x16"],
+        "modes": ["line","word","letter","scatter","reveal"],
+        "cached_at": "2026-03-15T00:00:00Z"
+      }
+    }
   }
 }
 ```
@@ -367,19 +555,18 @@ Text wall app content and style state for scene recall.
 
 ## Versioning
 
-Each type has its own version field independent of other types. Version follows semver lite:
+Each type has its own version field. Version follows semver lite:
 
 - `1.0` — initial stable definition
 - `1.1` — backwards compatible additions
 - `2.0` — breaking changes
 
-Apps should handle unknown fields gracefully — ignore rather than error. Apps should check version field and warn if they encounter a version higher than they support.
+Apps handle unknown fields gracefully — ignore rather than error.
+Apps warn if they encounter a version higher than they support.
 
 ---
 
 ## File Naming Conventions
-
-Suggested naming patterns:
 
 | Type | Naming Pattern |
 |---|---|
@@ -389,18 +576,31 @@ Suggested naming patterns:
 | `glitch_session` | `{date}_{name}.jbt` |
 | `nexus_scene` | `scene_{id}.jbt` |
 | `nexus_pattern` | `pattern_{id}.jbt` |
+| `lyric_timeline` | `{song_name}_lyrics.jbt` |
+| `textwall_layout` | `layout_{name}.jbt` |
+| `daw_setlist` | `{show_name}_setlist.jbt` |
+| `midi_mapping` | `midi_{controller}.jbt` |
 
 ---
 
 ## File Storage Locations
 
-| App | Default Path |
-|---|---|
-| Nexus scenes | `~/.nexus/jbt/scenes/` |
-| Nexus patterns | `~/.nexus/jbt/patterns/` |
-| DirtyMixerApp presets | `~/JBT/dirtymixer/presets/` |
-| DirtyMixerApp projects | `~/JBT/dirtymixer/projects/` |
-| Glitch Catalog sessions | `~/JBT/sessions/` |
+| App | Type | Path |
+|---|---|---|
+| Nexus | device_registry | `~/.nexus/jbt/device_registry.jbt` |
+| Nexus | eir_library | `~/.nexus/jbt/eir_library_{device_id}.jbt` |
+| Nexus | scenes | `~/.nexus/jbt/scenes/` |
+| Nexus | patterns | `~/.nexus/jbt/patterns/` |
+| Nexus | midi_mapping | `~/.nexus/jbt/midi_mapping_{controller}.jbt` |
+| Nexus | event_log | `~/.nexus/logs/nexus_rolling.jbt` |
+| Glitch Catalog | glitch_session | `~/JBT/sessions/` |
+| DirtyMixerApp | presets | `~/JBT/dirtymixer/presets/` |
+| DirtyMixerApp | projects | `~/JBT/dirtymixer/projects/` |
+| GlitchBoard | daw_setlist | `~/JBT/glitchboard/setlists/` |
+| GlitchBoard | capabilities_cache | `~/JBT/glitchboard/capabilities_cache.jbt` |
+| GlitchBoard | app_prefs | `~/JBT/glitchboard/prefs.jbt` |
+| TextWall | textwall_layout | `~/JBT/textwall/layouts/` |
+| Lyric App | lyric_timeline | `~/JBT/lyrics/` |
 
 ---
 
@@ -408,11 +608,12 @@ Suggested naming patterns:
 
 Any app parsing .jbt files should:
 
-1. Read `jbt_type` first — if unknown, skip gracefully
-2. Check `version` — warn if higher than supported
+1. Read `jbt_type` first — if unknown, skip gracefully, never error
+2. Check `version` — warn if higher than supported version
 3. Parse `payload` according to type schema
 4. Ignore unknown fields rather than erroring
-5. Never modify a .jbt file without updating `created_at` or adding a `modified_at` field
+5. Never modify a .jbt file without updating or adding `modified_at`
+6. Always write valid JSON — pretty-printed for human readability
 
 ---
 
@@ -420,10 +621,13 @@ Any app parsing .jbt files should:
 
 - `Nexus_Architecture.md` — Nexus server spec
 - `DirtyMixerApp_BuildGuide.md` — DirtyMixerApp spec
-- `Ecosystem_Overview.md` — full ecosystem map (TODO)
+- `TextWall_BuildGuide.md` — TextWall display app spec
+- `LyricApp_BuildGuide.md` — Lyric App authoring spec
+- `GlitchBoard_Spec.md` — GlitchBoard DAW spec
 
 ---
 
 *JBT Format Specification*
 *github.com/joebot94/docs*
-*Document version 1.0 — March 2026*
+*Document version 1.1 — March 2026*
+*🦖*

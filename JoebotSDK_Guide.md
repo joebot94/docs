@@ -1,13 +1,19 @@
 # JoebotSDK — Shared Swift Toolkit
 > Joebot Ecosystem Shared Foundation
 > GitHub: github.com/joebot94/joebotsdk
-> Document version 1.0 — March 2026
+> Document version 1.1 — March 2026
+> Changes: Updated theme palette values, added Phosphor Green and Neo Cyberpunk themes,
+> improved Amber Terminal colors, added operating mode toggle component,
+> added TextWallPreview component, fixed port references to 8675.
+> 🦖 Joebot Ecosystem
 
 ---
 
 ## What JoebotSDK Is
 
-JoebotSDK is a shared Swift package that every Joebot ecosystem app imports. It contains common code, UI components, data models, and utilities that would otherwise be duplicated across every app.
+JoebotSDK is a shared Swift package that every Joebot ecosystem app imports.
+It contains common code, UI components, data models, and utilities that would
+otherwise be duplicated across every app.
 
 Write it once. Every app gets it for free.
 
@@ -26,6 +32,7 @@ With JoebotSDK:
 - Fix a Nexus connection bug once — every app gets the fix
 - Update the .jbt parser once — every app reads the new format
 - Change the Nexus indicator design once — every app looks consistent
+- Update a theme once — every app redraws correctly
 - Share data models — apps can hand objects to each other cleanly
 
 ---
@@ -47,34 +54,48 @@ With JoebotSDK:
 
 ### 1. Nexus Client
 
-The complete Nexus WebSocket connection layer. Every app imports this instead of rolling its own.
+The complete Nexus WebSocket connection layer.
 
 **Responsibilities:**
-- WebSocket connection management
-- Auto-reconnection with backoff
+- WebSocket connection management to port 8675
+- Auto-reconnection with exponential backoff
 - Client registration on connect
 - Heartbeat sending every 5 seconds
 - Message sending and receiving
 - Connection state tracking
 - Capability discovery requests
+- Operating mode management (Autonomous/Sync/Managed)
+- Layout query requests
 
 **Usage in any app:**
 ```swift
-// In your app's main state object
 @StateObject var nexus = NexusClient(
-    clientId: "dirtymixer_v1",
-    clientType: "dirtymixer",
-    capabilities: ["presets", "automation"]
+    clientId: "textwall_v1",
+    clientType: "display",
+    operatingMode: .managed,
+    capabilities: ["word_mode", "scatter_mode", "16x16"]
 )
 
-// Connect
-nexus.connect(to: "nexus.joe.bot", port: 8765)
+// Connect — always port 8675
+nexus.connect(to: "localhost", port: 8675)
 
 // Send state update
-nexus.sendStateUpdate(state: currentBoardState)
+nexus.sendStateUpdate(state: currentGridState)
 
 // Send intent
-nexus.sendIntent(targets: ["textwall_v1"], action: "recall_preset", params: ["preset_id": 12])
+nexus.sendIntent(
+    targets: ["textwall_v1"],
+    action: "set_config",
+    params: ["grid_size": "3x3", "mode": "word"]
+)
+
+// Query another app's layout state
+nexus.queryLayout(of: "textwall_v1") { state in
+    // state.gridSize, state.activeCells, state.mode
+}
+
+// Set operating mode
+nexus.setOperatingMode(.sync, source: "textwall_v1", behavior: .invert)
 
 // Receive messages
 nexus.onMessage = { message in
@@ -86,45 +107,40 @@ nexus.onMessage = { message in
 
 ### 2. NexusStatusIndicator
 
-The standard Nexus connection indicator that appears in every app. Consistent design, consistent behavior, consistent position — top right corner of every app.
+The standard Nexus connection indicator. Top right corner of every app.
+Consistent design, consistent behavior, consistent position.
 
 **Visual states:**
 - 🟢 Green dot — Connected
-- 🔴 Red dot — Disconnected  
+- 🔴 Red dot — Disconnected
 - 🟡 Yellow dot — Connecting / Reconnecting
 
-**Behavior:**
-- Tap → opens NexusSettingsPopover
-- Always visible, never intrusive
+**Tap → opens NexusSettingsPopover:**
 
-**NexusSettingsPopover contains:**
 ```
-┌─ Nexus ──────────────────────────┐
-│  ● Connected                     │
-│                                  │
-│  Server                          │
-│  [ nexus.joe.bot              ]  │
-│                                  │
-│  Port                            │
-│  [ 8765 ]                        │
-│                                  │
-│  ☑ Auto-connect on launch        │
-│                                  │
-│  Connected as: dirtymixer_v1     │
-│  Uptime: 00:42:17                │
-│                                  │
-│  [ Disconnect ]                  │
-└──────────────────────────────────┘
+┌─ Nexus ──────────────────────────────┐
+│  🟢 Connected                        │
+│                                      │
+│  Server                              │
+│  [ localhost                      ]  │
+│                                      │
+│  Port                                │
+│  [ 8675 ]                            │
+│                                      │
+│  ☑ Auto-connect on launch            │
+│                                      │
+│  Connected as: textwall_v1           │
+│  Uptime: 00:42:17                    │
+│                                      │
+│  Operating Mode:                     │
+│  [ Managed ▼ ]                       │
+│                                      │
+│  [ Disconnect ]                      │
+└──────────────────────────────────────┘
 ```
 
-**Accepts either:**
-- IP address — `192.168.1.100`
-- Hostname — `nexus.joe.bot`
-- Local mDNS — `nexus.local`
-
-**Usage in any app:**
+**Usage:**
 ```swift
-// Drop into any toolbar
 ToolbarItem(placement: .topBarTrailing) {
     NexusStatusIndicator(client: nexus)
 }
@@ -134,35 +150,58 @@ One line. Every app gets consistent Nexus status UI.
 
 ---
 
-### 3. JBT Parser and Writer
+### 3. Operating Mode Toggle
 
-Complete .jbt file read/write implementation shared across all apps.
+A compact UI component showing and controlling the current operating mode.
+Displayed in the NexusStatusIndicator popover and optionally in the main toolbar.
 
-**Reading:**
+```
+┌─ Operating Mode ─────────────────────┐
+│                                      │
+│  [ 🤖 Autonomous | 🔄 Sync | 📡 Managed ]  │
+│                                      │
+│  Sync source: [ textwall_v1 ▼ ]     │
+│  Behavior:    [ Invert ▼ ]          │
+│                                      │
+└──────────────────────────────────────┘
+```
+
+**Usage:**
 ```swift
+OperatingModeToggle(client: nexus)
+```
+
+---
+
+### 4. JBT Parser and Writer
+
+Complete .jbt file read/write shared across all apps.
+
+```swift
+// Reading
 let session = try JBT.load(from: url, as: GlitchSession.self)
-let preset = try JBT.load(from: url, as: DirtyMixerPreset.self)
-```
+let lyrics  = try JBT.load(from: url, as: LyricTimeline.self)
+let setlist = try JBT.load(from: url, as: DAWSetlist.self)
 
-**Writing:**
-```swift
+// Writing
 try JBT.save(session, to: url)
-try JBT.save(preset, to: url)
-```
+try JBT.save(lyrics, to: url)
 
-**Type detection:**
-```swift
+// Type detection — read jbt_type without full parse
 let type = try JBT.detectType(at: url)
-// Returns "glitch_session", "dirtymixer_preset", etc.
+// Returns "glitch_session", "lyric_timeline", "daw_setlist" etc.
+
+// Version check
+let supported = JBT.isSupportedVersion(at: url)
 ```
 
 Handles versioning, unknown fields, migration between versions.
 
 ---
 
-### 4. Shared Data Models
+### 5. Shared Data Models
 
-Swift structs and classes for data types that multiple apps need to understand.
+Swift structs for data types that multiple apps need to understand.
 
 **Models included:**
 - `NexusMessage` — standard message envelope
@@ -174,51 +213,115 @@ Swift structs and classes for data types that multiple apps need to understand.
 - `DirtyMixerChannel` — per channel state
 - `ExtronSnapshot` — extron_snapshot .jbt type
 - `NexusScene` — nexus_scene .jbt type
+- `LyricTimeline` — lyric_timeline v2.0 .jbt type
+- `LyricCue` — individual lyric cue with TextWall config
+- `TextWallConfig` — TextWall display configuration per cue
+- `TextWallLayout` — saved named layout .jbt type
+- `DAWSetlist` — daw_setlist .jbt type
+- `MIDIMapping` — midi_mapping .jbt type
 
 ---
 
-### 5. Joebot Theme System
+### 6. Joebot Theme System
 
-Complete SwiftUI theming system. All apps share the same theme definitions and switch themes consistently.
+Complete SwiftUI theming system. All apps share the same theme definitions.
+Switch themes — entire app redraws instantly. One update propagates everywhere.
 
 **Available themes:**
 
 | Theme ID | Name | Description |
 |---|---|---|
-| `joebot` | Joebot Classic | Dark grey and orange — signature look |
-| `joebot_black` | Joebot Black | Full black and orange, high contrast |
-| `cyberpunk` | Neo Cyberpunk | Deep purple/blue, cyan accents, neon |
-| `dos` | DOS / Win3.11 | Navy background, cyan/white text |
-| `amber` | Amber Terminal | Black background, amber/golden text |
+| `joebot` | Joebot Classic | Dark grey background, orange accents — default |
+| `joebot_black` | Joebot Black | Full black, orange accents, high contrast |
+| `cyberpunk` | Neo Cyberpunk | Deep purple/black, cyan + magenta neon |
+| `dos` | DOS / Win3.11 | Navy background, cyan/white text — retro terminal |
+| `amber` | Amber Terminal | Near-black background, rich phosphor amber |
+| `phosphor` | Phosphor Green | Near-black background, classic CRT green glow |
+
+**Theme color values:**
+
+```swift
+// Joebot Classic
+background:  #1C1C1E
+surface:     #2C2C2E
+accent:      #FF6600  // orange
+text:        #FFFFFF
+textSecondary: #888888
+border:      #3C3C3E
+
+// DOS / Win3.11
+background:  #000080  // navy
+surface:     #0000AA
+accent:      #00FFFF  // cyan
+text:        #FFFFFF
+textSecondary: #AAAAAA
+border:      #0000CC
+
+// Amber Terminal — rich phosphor, NOT pale yellow
+background:  #0D0800  // near black, warm tint
+surface:     #180E00
+accent:      #FF8C00  // hot amber, almost burning
+text:        #FFB000  // proper phosphor amber
+textSecondary: #CC6600
+border:      #3D2200
+highlight:   #FFCC44  // bright phosphor bloom
+
+// Neo Cyberpunk
+background:  #0A0015  // near black, deep purple tint
+surface:     #150025
+accent:      #00FFFF  // electric cyan
+accent2:     #FF00FF  // neon magenta
+text:        #E0E0FF  // cool white with purple tint
+textSecondary: #8866CC
+border:      #4400AA  // deep purple
+highlight:   #00FFAA  // cyan-green neon
+active:      #FF00AA  // hot pink
+
+// Phosphor Green
+background:  #000D00  // near black, green tint
+surface:     #001500
+accent:      #00FF41  // matrix green
+text:        #00FF41
+textSecondary: #007722
+border:      #004400
+highlight:   #AAFFAA  // bright phosphor bloom
+dim:         #003311  // low intensity phosphor
+```
 
 **Usage:**
 ```swift
-// Apply theme to entire app
-@StateObject var theme = JoebotTheme.current
+@main
+struct TextWallApp: App {
+    @StateObject var theme = JoebotTheme(initial: .joebot)
 
-ContentView()
-    .environmentObject(theme)
-    .joebotTheme(theme)
-```
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(theme)
+        }
+    }
+}
 
-**Switching themes:**
-```swift
-JoebotTheme.current.set(.dos)
-// Entire app redraws instantly
+// Switch theme — entire app redraws
+JoebotTheme.current.set(.amber)
 ```
 
 **Theme definition structure:**
 ```swift
 struct ThemeDefinition {
+    let id: String
+    let name: String
     let background: Color
     let surface: Color
     let accent: Color
+    let accent2: Color?
     let text: Color
     let textSecondary: Color
     let border: Color
     let success: Color
     let warning: Color
     let error: Color
+    let highlight: Color
     let fontPrimary: String
     let fontMono: String
 }
@@ -226,52 +329,103 @@ struct ThemeDefinition {
 
 ---
 
-### 6. Common UI Components
-
-Reusable SwiftUI views used across multiple apps.
-
-**Components included:**
+### 7. Common UI Components
 
 | Component | Description |
 |---|---|
 | `NexusStatusIndicator` | Nexus connection dot and settings popover |
+| `OperatingModeToggle` | Autonomous/Sync/Managed mode switcher |
 | `JoebotButton` | Standard themed button |
 | `StatusDot` | Green/yellow/red status indicator dot |
 | `SectionHeader` | Consistent section header style |
-| `EmptyStateView` | Standard empty state with icon and message |
+| `EmptyStateView` | Standard empty state with 🦖 and message |
 | `LoadingView` | Standard loading indicator |
 | `ErrorBanner` | Non-intrusive error display |
 | `CapabilityGrid` | Dynamic grid built from capability data |
 | `PresetGrid` | Tappable preset selector grid |
-| `ChannelSelector` | Multi-select channel picker with quick select |
+| `ChannelSelector` | Multi-select channel picker |
+| `TextWallPreview` | Mini animated TextWall grid preview |
+| `CellLayoutPicker` | Tap-to-toggle freeform cell picker |
 
-**CapabilityGrid and PresetGrid** are particularly important for the DAW app — they build themselves dynamically from whatever capability data Nexus returns.
+#### TextWallPreview
+
+Mini animated preview of a TextWall configuration.
+Used in GlitchBoard cue editor, Lyric App cue editor, hover tooltips.
+
+```swift
+// Static preview
+TextWallPreview(
+    config: textWallConfig,
+    text: "welcome to the machine",
+    animated: false
+)
+
+// Animated preview (scatter/reveal modes animate live)
+TextWallPreview(
+    config: textWallConfig,
+    text: "welcome to the machine",
+    animated: true
+)
+```
+
+```
+┌───────┬───────┬───────┐
+│  WEL  │  TO   │  THE  │
+│  COME │       │       │
+├───────┼───────┼───────┤
+│       │ MACH  │       │
+│       │  INE  │       │
+├───────┼───────┼───────┤
+│       │       │       │
+│       │       │       │
+└───────┴───────┴───────┘
+```
+
+#### CellLayoutPicker
+
+Freeform cell picker — tap any cell to toggle active/inactive.
+Saves as named layout. Every preset is just a saved freeform selection.
+
+```swift
+CellLayoutPicker(
+    gridSize: GridSize(rows: 3, cols: 3),
+    activeCells: $activeCells,
+    onSave: { name in
+        // save as named layout
+    }
+)
+```
+
+```
+┌───┬───┬───┐
+│ ☑ │ ☐ │ ☑ │  ← tap cells to toggle
+├───┼───┼───┤
+│ ☐ │ ☑ │ ☐ │
+├───┼───┼───┤
+│ ☑ │ ☐ │ ☑ │
+└───┴───┴───┘
+[ Save Layout... ]  Name: [ X Pattern ]
+```
 
 ---
 
 ## Capability Discovery Helper
 
-JoebotSDK includes a helper for capability discovery so any app can ask Nexus what another app can do:
-
 ```swift
-// Ask Nexus what the dirty mixer can do
-nexus.queryCapabilities(of: "dirtymixer_v1") { capabilities in
-    // capabilities.channels == 9
-    // capabilities.presets == 24
-    // capabilities.mixRange == 0...255
+// Ask Nexus what TextWall can do
+nexus.queryCapabilities(of: "textwall_v1") { capabilities in
+    // capabilities.gridSizes
+    // capabilities.modes
+    // capabilities.layouts
+    // capabilities.maxHz
     // Build your UI from this
 }
-```
 
-The CapabilityGrid component accepts capabilities directly:
-
-```swift
-CapabilityGrid(
-    capabilities: dirtymixerCapabilities,
-    onSelection: { selectedItems in
-        // User selected these presets/channels/whatever
-    }
-)
+// Ask Nexus what the MTPX can do
+nexus.queryCapabilities(of: "device.mtpx.1") { capabilities in
+    // capabilities.actions[0].action == "set_input_skew"
+    // capabilities.actions[0].params["blue"].range == [0, 31]
+}
 ```
 
 ---
@@ -282,14 +436,15 @@ Every Joebot app follows this pattern:
 
 ```swift
 @main
-struct DirtyMixerApp: App {
+struct TextWallApp: App {
     @StateObject var nexus = NexusClient(
-        clientId: "dirtymixer_v1",
-        clientType: "dirtymixer",
-        capabilities: ["presets", "automation", "random_mode"]
+        clientId: "textwall_v1",
+        clientType: "display",
+        operatingMode: .managed,
+        capabilities: ["word_mode", "scatter_mode", "reveal_mode", "16x16"]
     )
     @StateObject var theme = JoebotTheme(initial: .joebot)
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -300,24 +455,28 @@ struct DirtyMixerApp: App {
 }
 ```
 
-From that point every view in the app has access to the Nexus client and theme via environment.
+Every view in the app has access to Nexus client and theme via environment.
 
 ---
 
 ## Graceful Nexus Degradation
 
-Every app using JoebotSDK handles Nexus being unavailable gracefully. The SDK provides:
+Every app handles Nexus being unavailable gracefully:
 
 ```swift
-// Check before using Nexus-dependent features
 if nexus.isConnected {
     // Show full feature set
+    SnapshotButton()
+    NexusDependentFeature()
 } else {
-    // Show degraded but functional UI
+    // Degraded but functional
+    SnapshotButton().disabled(true)
+    Text("Connect to Nexus to enable").foregroundColor(.secondary)
 }
 ```
 
-Features that require Nexus are automatically disabled with a clear visual indicator when not connected. Apps never crash or show errors because Nexus is offline — they just show reduced functionality cleanly.
+Features that require Nexus are disabled with clear visual indicators when offline.
+Apps never crash or error because Nexus is offline.
 
 ---
 
@@ -333,6 +492,7 @@ joebotsdk/
 │       │   ├── NexusClient.swift
 │       │   ├── NexusMessage.swift
 │       │   ├── NexusState.swift
+│       │   ├── OperatingMode.swift        ← NEW
 │       │   └── CapabilityDiscovery.swift
 │       ├── JBT/
 │       │   ├── JBTParser.swift
@@ -341,9 +501,15 @@ joebotsdk/
 │       │       ├── GlitchSession.swift
 │       │       ├── DirtyMixerPreset.swift
 │       │       ├── DirtyMixerTimeline.swift
-│       │       └── ExtronSnapshot.swift
+│       │       ├── ExtronSnapshot.swift
+│       │       ├── LyricTimeline.swift     ← NEW
+│       │       ├── TextWallLayout.swift    ← NEW
+│       │       └── DAWSetlist.swift        ← NEW
 │       ├── UI/
 │       │   ├── NexusStatusIndicator.swift
+│       │   ├── OperatingModeToggle.swift   ← NEW
+│       │   ├── TextWallPreview.swift       ← NEW
+│       │   ├── CellLayoutPicker.swift      ← NEW
 │       │   ├── CapabilityGrid.swift
 │       │   ├── PresetGrid.swift
 │       │   ├── ChannelSelector.swift
@@ -357,9 +523,10 @@ joebotsdk/
 │           └── Themes/
 │               ├── JoebotClassic.swift
 │               ├── JoebotBlack.swift
-│               ├── NeoCyberpunk.swift
+│               ├── NeoCyberpunk.swift      ← UPDATED colors
 │               ├── DOS.swift
-│               └── Amber.swift
+│               ├── Amber.swift             ← UPDATED — richer phosphor
+│               └── PhosphorGreen.swift     ← NEW
 └── Tests/
     └── JoebotSDKTests/
 ```
@@ -368,19 +535,22 @@ joebotsdk/
 
 ## Build Priority
 
-1. NexusClient — WebSocket connection, registration, heartbeat
+1. NexusClient — WebSocket connection, registration, heartbeat, port 8675
 2. NexusStatusIndicator — the universal Nexus dot
-3. JoebotTheme — theme system with Joebot Classic and DOS themes
-4. JBT parser/writer — basic read/write for glitch_session and dirtymixer_preset
-5. Shared data models
-6. CapabilityGrid and PresetGrid — for DAW app
-7. Remaining UI components
+3. JoebotTheme — all themes with updated color values
+4. OperatingMode system — Autonomous/Sync/Managed
+5. JBT parser/writer — all types including lyric_timeline v2.0
+6. Shared data models — LyricTimeline, TextWallLayout, DAWSetlist
+7. TextWallPreview — mini animated grid preview
+8. CellLayoutPicker — freeform cell toggle picker
+9. CapabilityGrid and PresetGrid
+10. Remaining UI components
 
 ---
 
 ## First Session Prompt for Claude Code
 
-> "I am building JoebotSDK, a Swift Package that is shared across all apps in the Joebot ecosystem. Start by building the NexusClient class that manages a WebSocket connection to the Nexus server, handles registration, sends heartbeats every 5 seconds, tracks connection state, and exposes a simple API for sending and receiving messages. Then build NexusStatusIndicator, a SwiftUI view that shows a green/yellow/red dot indicating connection status and opens a small popover when tapped where the user can enter a server hostname or IP address and port. The popover should show connection status, uptime, and a disconnect button. Use the Joebot Classic dark theme — dark grey background, orange accents."
+> "I am building JoebotSDK, a Swift Package shared across all apps in the Joebot Ecosystem. Start by building the NexusClient class that manages a WebSocket connection to Nexus on port 8675, handles registration with operating mode support (Autonomous/Sync/Managed), sends heartbeats every 5 seconds, tracks connection state, and exposes a simple API for sending and receiving messages. Then build NexusStatusIndicator showing a green/yellow/red dot with a settings popover including server hostname, port (default 8675), operating mode toggle, uptime display, and disconnect button. Then build the JoebotTheme system with all six themes: Joebot Classic, Joebot Black, Neo Cyberpunk, DOS/Win3.11, Amber Terminal, and Phosphor Green — using the exact color values in JoebotSDK_Guide.md. Read the full spec at https://raw.githubusercontent.com/joebot94/docs/main/JoebotSDK_Guide.md"
 
 ---
 
@@ -389,10 +559,13 @@ joebotsdk/
 - `Nexus_Architecture.md` — Nexus server spec
 - `Observatory_BuildGuide.md` — Observatory app spec
 - `DirtyMixerApp_BuildGuide.md` — DirtyMixerApp spec
+- `TextWall_BuildGuide.md` — TextWall display app spec
+- `LyricApp_BuildGuide.md` — Lyric App authoring spec
 - `JBT_Format_Spec.md` — .jbt file format reference
 
 ---
 
 *JoebotSDK — Shared Swift foundation for the Joebot ecosystem*
 *github.com/joebot94/joebotsdk*
-*Document version 1.0 — March 2026*
+*Document version 1.1 — March 2026*
+*🦖*
